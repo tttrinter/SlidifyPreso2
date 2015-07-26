@@ -1,0 +1,138 @@
+---
+title       : Data Products Presentation
+subtitle    : USD Interest Rate Curves
+author      : 
+job         : 
+framework   : io2012        # {io2012, html5slides, shower, dzslides, ...}
+highlighter : highlight.js  # {highlight.js, prettify, highlight}
+hitheme     : tomorrow      # 
+widgets     : [mathjax]            # {mathjax, quiz, bootstrap}
+mode        : selfcontained # {standalone, draft}
+knit        : slidify::knit2slides
+---
+
+
+## Overview
+The objective of this project was to learn to create data driven web applications using Shiny and presentations using Slidify or RStudio Presenter. 
+
+For the subject material, I chose to create an application that looks at interest rate data and performs the necessary calculations to break down the interest rate curves into the components used to price fixed income financial instruments.  
+
+---
+## Data
+The data used for the application and this presentatioin is Federal Reserve Economic Data (FRED). I used the Quandl API in R to pull the data and saved it to a file to eliminate the need to call the API with each use. 
+* Data for 65 different dates, monthly from 1/1/2010 to 5/1/2015
+* Data for each date consists of 9 data points with Maturities range from 1 month to 10 years
+* Below is a graph showing all yield curves
+
+```{r echo=FALSE, fig.align='center',out.width='400px',out.height='250px'}
+AllData=read.csv("C:/Users/Tom/Documents/Coursera/Data Science/9. Developing Data Projects/Shiny/YieldCurveData.csv")
+#Plot all curves
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(scales))
+g=ggplot(AllData, aes(x=Term,y=Value, group=Date, color=Date))
+g=g+geom_line()+ggtitle("Yield Curves - All Dates")
+g=g+scale_y_continuous(labels=percent)
+g=g+theme(legend.position="none")
+g
+```
+
+---
+## Calculations
+For each date selected, the curves are processed using the following steps:
+* Fit a cubic-polynomial model to the 9 data points and predict a full set of 20 points 6 months apart
+* Bootstrap those 20 points to solve for the zero coupon rate and discount rate at each point  
+* Use the zero coupon rates to determine 6 month forward rates for each point on the curve
+* Graph the curves and return it to the app
+
+---
+## Results
+The following graph shows the results for the first date in the data set.
+
+```{r echo=FALSE}
+
+#Bootstrap Terms
+newTerms=as.data.frame(seq(from=0.5, to=10, by=0.5))
+names(newTerms)="Term"
+asOfDate="2015-05-01"
+plotYieldCurve <- function(dateIndex) {
+    asOfDate=unique(AllData$Date)[dateIndex]
+    title=paste("Yield Curve: ", asOfDate) 
+    curveData=AllData[AllData$Date==asOfDate,]
+
+    interpPoints=fitAndPredict(curveData)
+    zeroCurve=bootstrap(interpPoints)
+    forwardCurve=impliedForwards(zeroCurve)
+    
+    g=ggplot(curveData, aes(x=Term,y=Value), ylab='Rate')
+    g=g+geom_line(color="blue")
+    g=g+geom_point(color="blue", size=2)
+
+    #add the fitted data points
+    g=g+geom_point(data=interpPoints, aes(x=Term, y=Value),color="green",size=3)
+
+    #add the zero coupon curve
+    g=g+geom_point(data=zeroCurve, aes(x=Term, y=Value),color="red",size=3)
+    g=g+geom_line(data=zeroCurve, aes(x=Term, y=Value),color="red")
+    
+    #add the forward curve
+    g=g+geom_point(data=forwardCurve, aes(x=Term, y=Value),color="black",size=3)
+    g=g+geom_line(data=forwardCurve, aes(x=Term, y=Value),color="black")
+    
+    #add titles
+    g=g+ylab('Rate')+ggtitle(title)
+    g=g+scale_y_continuous(labels=percent)
+
+    #add legend
+    #g=g+scale_color_manual(name="Curves",values=cols)
+    g
+}
+
+fitAndPredict <- function(curveData) {
+    fit3 <- lm(Value ~ poly(Term,4,raw=TRUE), data=curveData, )
+    predictedPoints=predict(fit3,newdata=newTerms)
+    newData=cbind(newTerms, predictedPoints)
+    names(newData)=c("Term","Value")
+    newData
+}
+
+bootstrap <- function(interpPoints) {
+    zeros=data.frame("counter"=integer(20),"Value" = numeric(20))
+    zeros[,1]=seq(1:20)
+    discounts=data.frame("counter"=integer(20),"Value" = numeric(20))
+    discounts[,1]=seq(1:20)
+
+    #calculate first period values
+    zeros[1,2]=interpPoints[1,2]
+    discounts[1,2]=1/(1+zeros[1,2]*.5)
+
+    for(i in 2:20) {
+        CouponRate=interpPoints[i,2]/2
+        numerator=CouponRate+1
+        denominator=1-sum(CouponRate*discounts[discounts$counter<i,2])
+        zeros[i,2]=(numerator/denominator-1)/newTerms[i,1]
+        discounts[i,2]=1/(1+zeros[i,2]*newTerms[i,1])
+    }
+    
+    zeroRates=cbind(newTerms, zeros[,2])
+    names(zeroRates)=c("Term","Value")
+    zeroRates
+    
+}
+
+impliedForwards <- function(zeroCurve) {
+    forwards=data.frame("counter"=integer(20),"Value" = numeric(20))
+    forwards[,1]=seq(1:20)
+    forwards[1,2]=zeroCurve[1,2]
+    
+    for(i in 2:20) {
+        forwards[i,2]=(1+zeroCurve[i,2]*zeroCurve[i,1])
+        forwards[i,2]=forwards[i,2]/(1+zeroCurve[i-1,2]*zeroCurve[i-1,1])-1
+        forwards[i,2]=forwards[i,2]/(.5)
+    }
+    forwardRates=cbind(newTerms, forwards[,2])
+    names(forwardRates)=c("Term","Value")
+    forwardRates
+}
+
+plotYieldCurve(1)
+```
